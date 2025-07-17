@@ -3,9 +3,11 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
   @State private var image: Image?
+  @State private var pngData: Data?
   @State private var promptText: String = ""
   @State private var generationManager = GenerationManager()
   @State private var showingSavePanel = false
+  @State private var showingLoadPanel = false
 
   var generationManagerIsReady: Bool {
     switch generationManager.generationState {
@@ -39,7 +41,7 @@ struct ContentView: View {
         case .ready, .generating:
           EmptyView()
         default:
-          Text("This app downloads about 34 GB of model files and requires about 11 GB of free RAM.")
+          Text("This app downloads about 35 GB of model files and requires about 16 GB of free RAM.")
             .foregroundColor(.secondary)
       }
 
@@ -61,12 +63,15 @@ struct ContentView: View {
                 ) {
                   Label("Share", systemImage: "square.and.arrow.up")
                 }
+                .disabled(generationManager.generationState == .generating)
+                  
                 // Save button
                 Button(action: {
                   showingSavePanel = true
                 }) {
                   Label("Save", systemImage: "square.and.arrow.down")
                 }
+                .disabled(generationManager.generationState == .generating)
                 .fileExporter(
                   isPresented: $showingSavePanel,
                   document: ImageDocument(image: cgImage),
@@ -130,6 +135,36 @@ struct ContentView: View {
           case .ready:
             VStack(spacing: verticalSpacing) {
               HStack {
+                  Button {
+                      showingLoadPanel = true
+                  } label: {
+                      Image(systemName: "folder")
+                      Text("Choose File...")
+                  }
+                  .fileImporter(isPresented: $showingLoadPanel, allowedContentTypes: [.png], allowsMultipleSelection: false) { result in
+                      switch result {
+                      case .success(let files):
+                          files.forEach { file in
+                              // gain access to the directory
+                              let gotAccess = file.startAccessingSecurityScopedResource()
+                              if !gotAccess { return }
+                              // access the directory URL
+                              // (read templates in the directory, make a bookmark, etc.)
+                              
+                              pngData = try! Data(contentsOf: file.standardizedFileURL)
+                              
+                              // release access
+                              file.stopAccessingSecurityScopedResource()
+                              
+                              // create refresh image
+                              let cgImage = createCGImageFromPNGData(pngData: pngData!)
+                              generationManager.generatedImage = cgImage
+                          }
+                      case .failure(let error):
+                          print(error.localizedDescription)
+                      }
+                  }
+                  
                 TextField("Prompt", text: $promptText)
                   .onSubmit(submit)
                   .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -157,7 +192,8 @@ struct ContentView: View {
   private func submit() {
     Task {
       do {
-        image = try await generationManager.generate(with: promptText, imageSize: imageSize)
+          let cgImage = createCGImageFromPNGData(pngData: pngData!)
+          image = try await generationManager.generate(with: promptText, with: cgImage!)
       } catch {
         print("Error during load: \(error.localizedDescription)")
       }

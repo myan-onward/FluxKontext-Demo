@@ -1,6 +1,7 @@
 import FluxSwift
 import MLX
 import SwiftUI
+import Hub
 
 @globalActor actor GenerationActor {
   static let shared = GenerationActor()
@@ -37,9 +38,13 @@ final class GenerationManager: Sendable {
 
   @MainActor var currentStep: Int = 0
   @MainActor var totalSteps: Int = 0
+  
+    let guidance:Float = 1.0
+    let seed:UInt64 = 2
+    let shiftSigmas = true  // true for Kontext and Dev
 
-  private let config = FluxConfiguration.flux1Schnell
-  private var generator: TextToImageGenerator?
+  private let config = FluxConfiguration.flux1KontextDev
+  private var generator: KontextImageToImageGenerator?
 
   @MainActor init() {
     Task {
@@ -52,7 +57,7 @@ final class GenerationManager: Sendable {
       generationState = .downloading(progress: 0.0)
     }
     do {
-      try await config.download { @Sendable progress in
+        try await config.download { @Sendable progress in
         Task { @MainActor in
           self.generationState = .downloading(progress: progress.fractionCompleted)
         }
@@ -64,7 +69,7 @@ final class GenerationManager: Sendable {
     }
     let loadConfig = LoadConfiguration(float16: true, quantize: true)
     do {
-      generator = try config.textToImageGenerator(configuration: loadConfig)
+        generator = try config.kontextImageToImageGenerator(configuration: loadConfig)
     } catch {
       await MainActor.run {
         generationState = .loadingFailed(error)
@@ -85,7 +90,16 @@ final class GenerationManager: Sendable {
     case decoding, noImage
   }
 
-  func generate(with prompt: String, imageSize: CGSize) async throws -> Image {
+    func generate(with prompt: String, with image: CGImage) async throws -> Image {
+        
+        // Modify input image to preferred Kontext parameters
+        let preferredKontextResolution = KontextUtilities.selectKontextResolution(width: image.width, height: image.height)
+        let resized = resizeCGImage(image: image, to: CGSize(width: preferredKontextResolution.width, height: preferredKontextResolution.height))
+        
+    // Set up parameters
+        var params: EvaluateParameters = await EvaluateParameters(width: preferredKontextResolution.width, height: preferredKontextResolution.height, numInferenceSteps: config.defaultParameters().numInferenceSteps, guidance: guidance, seed: seed, prompt: prompt, shiftSigmas: shiftSigmas)
+        params.seed = UInt64.random(in: 0..<UInt64.max)
+        
     await MainActor.run {
       generatedImage = nil
       generationState = .generating
@@ -100,20 +114,22 @@ final class GenerationManager: Sendable {
         generationTimeSeconds = CFAbsoluteTimeGetCurrent() - startTime
       }
     }
-    // Set up parameters
-    var params = config.defaultParameters()
-    params.prompt = prompt
-    params.width = Int(imageSize.width)
-    params.height = Int(imageSize.height)
+        
+        let inputArray = resized!.toMLXArray()
+        let normalized = (inputArray!.asType(.float32) / 255) * 2 - 1
+        
     // Generate image latents
-    var denoiser = generator?.generateLatents(parameters: params)
+        var denoiser = generator?.generateKontextLatents(image: normalized, parameters: params)
     var lastXt: MLXArray!
-    while let xt = denoiser?.next() {
+        while let xt = denoiser?.next() {
       let currentStep = denoiser?.i ?? 0
       await MainActor.run {
         self.currentStep = currentStep
+          generationTimeSeconds = CFAbsoluteTimeGetCurrent() - startTime
       }
+        eval(xt)
       lastXt = xt
+            
       // Intermediate update
       let unpackedLatents = unpackLatents(lastXt, height: params.height, width: params.width)
       if let decoded = generator?.decode(xt: unpackedLatents) {
@@ -126,9 +142,11 @@ final class GenerationManager: Sendable {
         }
       }
     }
+        
     // Decode latents to image
     let unpackedLatents = unpackLatents(lastXt, height: params.height, width: params.width)
     let decoded = generator?.decode(xt: unpackedLatents)
+        
     // Process and save the image
     guard let decoded else {
       print("Error decoding image")

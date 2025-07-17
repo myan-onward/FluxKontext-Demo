@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct FluxDemoApp: App {
+struct FluxKontextDemoApp: App {
   var body: some Scene {
     WindowGroup {
       ContentView()
