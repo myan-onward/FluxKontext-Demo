@@ -141,23 +141,27 @@ struct ContentView: View {
                       Image(systemName: "folder")
                       Text("Choose File...")
                   }
-                  .fileImporter(isPresented: $showingLoadPanel, allowedContentTypes: [.png], allowsMultipleSelection: false) { result in
+                  .fileImporter(isPresented: $showingLoadPanel, allowedContentTypes: [.png, .jpeg], allowsMultipleSelection: false) { result in
                       switch result {
                       case .success(let files):
                           files.forEach { file in
                               // gain access to the directory
                               let gotAccess = file.startAccessingSecurityScopedResource()
                               if !gotAccess { return }
-                              // access the directory URL
-                              // (read templates in the directory, make a bookmark, etc.)
                               
+                              // access the directory URL
                               pngData = try! Data(contentsOf: file.standardizedFileURL)
                               
                               // release access
                               file.stopAccessingSecurityScopedResource()
                               
-                              // create refresh image
-                              let cgImage = createCGImageFromPNGData(pngData: pngData!)
+                              // create and refresh image
+                              var cgImage: CGImage!
+                              if file.absoluteString.hasSuffix(".png") {
+                                  cgImage = createCGImageFromPNGData(pngData: pngData!)
+                              } else if file.absoluteString.hasSuffix(".jpeg") || file.absoluteString.hasSuffix(".jpg") {
+                                  cgImage = createCGImageFromJPEGData(jpegData: pngData!)
+                              }
                               generationManager.generatedImage = cgImage
                           }
                       case .failure(let error):

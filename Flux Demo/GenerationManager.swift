@@ -39,11 +39,11 @@ final class GenerationManager: Sendable {
   @MainActor var currentStep: Int = 0
   @MainActor var totalSteps: Int = 0
   
-    let guidance:Float = 1.0
     let seed:UInt64 = 2
-    let shiftSigmas = true  // true for Kontext and Dev
 
   private let config = FluxConfiguration.flux1KontextDev
+    private let loraConfig = FluxLoraConfiguration.flux1TurboAlpha
+    private var loadConfig = LoadConfiguration(float16: true, quantize: true)
   private var generator: KontextImageToImageGenerator?
 
   @MainActor init() {
@@ -67,7 +67,22 @@ final class GenerationManager: Sendable {
         generationState = .downloadFailed(error)
       }
     }
-    let loadConfig = LoadConfiguration(float16: true, quantize: true)
+      loadConfig = LoadConfiguration(float16: true, quantize: true, loraPath: loraConfig.id)
+      if let loraPath = loadConfig.loraPath {
+        if !FileManager.default.fileExists(atPath: loraPath) {
+            do {
+                try await config.downloadLoraWeights(loadConfiguration: loadConfig) { @Sendable progress in
+                    Task { @MainActor in
+                      self.generationState = .downloading(progress: progress.fractionCompleted)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                  generationState = .downloadFailed(error)
+                }
+            }
+        }
+      }
     do {
         generator = try config.kontextImageToImageGenerator(configuration: loadConfig)
     } catch {
@@ -91,13 +106,12 @@ final class GenerationManager: Sendable {
   }
 
     func generate(with prompt: String, with image: CGImage) async throws -> Image {
-        
-        // Modify input image to preferred Kontext parameters
-        let preferredKontextResolution = KontextUtilities.selectKontextResolution(width: image.width, height: image.height)
-        let resized = resizeCGImage(image: image, to: CGSize(width: preferredKontextResolution.width, height: preferredKontextResolution.height))
-        
     // Set up parameters
-        var params: EvaluateParameters = await EvaluateParameters(width: preferredKontextResolution.width, height: preferredKontextResolution.height, numInferenceSteps: config.defaultParameters().numInferenceSteps, guidance: guidance, seed: seed, prompt: prompt, shiftSigmas: shiftSigmas)
+        let preferredKontextResolution = KontextUtilities.selectKontextResolution(width: image.width, height: image.height)
+        let inferenceSteps = loadConfig.loraPath != nil ? loraConfig.numInferenceSteps : config.defaultParameters().numInferenceSteps
+        let guidance = config.id == "kontext" ? 2.5 : config.defaultParameters().guidance  // per Black Forest Lab's sample code
+        let shiftSigmas = config.id == "kontext" || config.id == "dev"
+        var params: EvaluateParameters = EvaluateParameters(width: preferredKontextResolution.width, height: preferredKontextResolution.height, numInferenceSteps: inferenceSteps, guidance: guidance, seed: seed, prompt: prompt, shiftSigmas: shiftSigmas)
         params.seed = UInt64.random(in: 0..<UInt64.max)
         
     await MainActor.run {
@@ -105,7 +119,7 @@ final class GenerationManager: Sendable {
       generationState = .generating
       generationTimeSeconds = nil
       currentStep = 0
-      totalSteps = config.defaultParameters().numInferenceSteps + 1 // Add one, since last step is decoding
+      totalSteps = inferenceSteps + 1 // Add one, since last step is decoding
     }
     let startTime = CFAbsoluteTimeGetCurrent()
     defer {
@@ -115,8 +129,9 @@ final class GenerationManager: Sendable {
       }
     }
         
-        let inputArray = resized!.toMLXArray()
-        let normalized = (inputArray!.asType(.float32) / 255) * 2 - 1
+        let inputArray = image.toMLXArray()
+        let resized = KontextUtilities.resizeImage(inputArray!, targetWidth: params.width, targetHeight: params.height)
+        let normalized = (resized.asType(.float32) / 255) * 2 - 1
         
     // Generate image latents
         var denoiser = generator?.generateKontextLatents(image: normalized, parameters: params)
