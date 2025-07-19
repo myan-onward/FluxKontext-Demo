@@ -105,7 +105,7 @@ final class GenerationManager: Sendable {
     case decoding, noImage
   }
 
-    func generate(with prompt: String, with image: CGImage) async throws -> Image {
+    func generate(with prompt: String, with image: CGImage) async throws -> CGImage {
     // Set up parameters
         let preferredKontextResolution = KontextUtilities.selectKontextResolution(width: image.width, height: image.height)
         let inferenceSteps = loadConfig.loraPath != nil ? loraConfig.numInferenceSteps : config.defaultParameters().numInferenceSteps
@@ -173,7 +173,7 @@ final class GenerationManager: Sendable {
       await MainActor.run {
         generatedImage = cgImage
       }
-      return Image(cgImage, scale: 1.0, label: Text(prompt))
+        return cgImage
     } else {
       throw GenerationError.noImage
     }

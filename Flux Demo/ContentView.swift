@@ -2,8 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-  @State private var image: Image?
-  @State private var pngData: Data?
+  @State private var image: CGImage?
   @State private var promptText: String = ""
   @State private var generationManager = GenerationManager()
   @State private var showingSavePanel = false
@@ -150,7 +149,7 @@ struct ContentView: View {
                               if !gotAccess { return }
                               
                               // access the directory URL
-                              pngData = try! Data(contentsOf: file.standardizedFileURL)
+                              let pngData = try! Data(contentsOf: file.standardizedFileURL)
                               
                               // release access
                               file.stopAccessingSecurityScopedResource()
@@ -158,10 +157,11 @@ struct ContentView: View {
                               // create and refresh image
                               var cgImage: CGImage!
                               if file.absoluteString.hasSuffix(".png") {
-                                  cgImage = createCGImageFromPNGData(pngData: pngData!)
+                                  cgImage = createCGImageFromPNGData(pngData: pngData)
                               } else if file.absoluteString.hasSuffix(".jpeg") || file.absoluteString.hasSuffix(".jpg") {
-                                  cgImage = createCGImageFromJPEGData(jpegData: pngData!)
+                                  cgImage = createCGImageFromJPEGData(jpegData: pngData)
                               }
+                              image = cgImage
                               generationManager.generatedImage = cgImage
                           }
                       case .failure(let error):
@@ -196,8 +196,7 @@ struct ContentView: View {
   private func submit() {
     Task {
       do {
-          let cgImage = createCGImageFromPNGData(pngData: pngData!)
-          image = try await generationManager.generate(with: promptText, with: cgImage!)
+          image = try await generationManager.generate(with: promptText, with: image!)
       } catch {
         print("Error during load: \(error.localizedDescription)")
       }
